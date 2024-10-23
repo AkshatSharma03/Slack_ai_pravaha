@@ -20,5 +20,5 @@ from pravahabot import views as bot_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("pravahabot/events", bot_views.slack_events_endpoint),
+    path("pravahabot/events/", bot_views.slack_events_endpoint),
 ]
