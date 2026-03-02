@@ -1,23 +1,21 @@
 """
-Django management command to index documents into the Upstash vector store.
+Django management command to index documents into Upstash vector store.
+
+Bypasses LlamaIndex storage layer — uses sentence-transformers + upstash-vector
+client directly for reliable upserts.
 
 Usage:
     python manage.py index_documents                  # indexes src/data/ folder
     python manage.py index_documents --path /my/docs  # indexes a custom folder
 
-Run this once after setting up Upstash, and again whenever you add new documents.
 Supported file types: PDF, TXT, MD, DOCX
+Run once after setup; run again to refresh when docs change.
 """
-import os
 from pathlib import Path
 
 from django.core.management.base import BaseCommand
 
 import helpers
-from llama_index.core import Settings as LlamaSettings, SimpleDirectoryReader, VectorStoreIndex
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.vector_stores.upstash import UpstashVectorStore
-from upstash_vector import Index
 
 
 class Command(BaseCommand):
@@ -32,11 +30,15 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        # ── Imports (lazy to keep startup fast) ───────────────────────────
+        from llama_index.core import SimpleDirectoryReader
+        from sentence_transformers import SentenceTransformer
+        from upstash_vector import Index, Vector
+
         # ── Resolve document path ──────────────────────────────────────────
         if options["path"]:
             doc_path = Path(options["path"])
         else:
-            # Default: src/data/ relative to manage.py
             doc_path = Path(__file__).resolve().parents[4] / "data"
 
         if not doc_path.exists():
@@ -58,38 +60,60 @@ class Command(BaseCommand):
 
         self.stdout.write(f"✅ Loaded {len(docs)} document chunks")
 
-        # ── Configure embeddings ───────────────────────────────────────────
+        # ── Load embedding model ───────────────────────────────────────────
         self.stdout.write("🤖 Loading embedding model (BAAI/bge-small-en-v1.5)…")
-        LlamaSettings.embed_model = HuggingFaceEmbedding(
-            model_name="BAAI/bge-small-en-v1.5"
-        )
-        LlamaSettings.llm = None
+        model = SentenceTransformer("BAAI/bge-small-en-v1.5")
 
         # ── Connect to Upstash ─────────────────────────────────────────────
         url = helpers.config("UPSTASH_VECTOR_REST_URL", default=None)
         token = helpers.config("UPSTASH_VECTOR_REST_TOKEN", default=None)
 
         if not url or not token:
-            self.stderr.write(
-                self.style.ERROR(
-                    "UPSTASH_VECTOR_REST_URL and UPSTASH_VECTOR_REST_TOKEN must be set in Railway env vars"
-                )
-            )
+            self.stderr.write(self.style.ERROR(
+                "UPSTASH_VECTOR_REST_URL and UPSTASH_VECTOR_REST_TOKEN must be set"
+            ))
             return
 
-        vector_store = UpstashVectorStore(url=url, token=token)
+        index = Index(url=url, token=token)
 
-        # ── Index documents ────────────────────────────────────────────────
-        self.stdout.write("⚡ Indexing into Upstash (this may take a few minutes)…")
-        VectorStoreIndex.from_documents(
-            docs,
-            vector_store=vector_store,
-            show_progress=True,
-        )
+        # ── Embed and upsert in batches ────────────────────────────────────
+        self.stdout.write("⚡ Generating embeddings and upserting into Upstash…")
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"🎉 Done! {len(docs)} chunks indexed into Upstash. "
-                "Your knowledge base is ready."
-            )
-        )
+        BATCH = 50  # upsert 50 vectors at a time
+        batch: list[Vector] = []
+        total_upserted = 0
+
+        for i, doc in enumerate(docs):
+            text = doc.get_content()
+            if not text.strip():
+                continue
+
+            embedding = model.encode(text, normalize_embeddings=True).tolist()
+            source = str(doc.metadata.get("file_path", doc.metadata.get("file_name", "")))
+
+            batch.append(Vector(
+                id=f"doc_{i}",
+                vector=embedding,
+                metadata={
+                    "text": text[:8000],   # Upstash metadata limit
+                    "source": source,
+                },
+            ))
+
+            if len(batch) >= BATCH:
+                index.upsert(vectors=batch)
+                total_upserted += len(batch)
+                self.stdout.write(f"  ↑ Upserted {total_upserted}/{len(docs)} chunks…")
+                batch = []
+
+        # Flush remaining
+        if batch:
+            index.upsert(vectors=batch)
+            total_upserted += len(batch)
+
+        # ── Verify ────────────────────────────────────────────────────────
+        info = index.info()
+        self.stdout.write(self.style.SUCCESS(
+            f"🎉 Done! {total_upserted} chunks upserted. "
+            f"Upstash now reports {info.vector_count} total vectors."
+        ))
