@@ -1,22 +1,11 @@
 import pathlib
-from functools import lru_cache
 
-from decouple import Config, RepositoryEnv
+from decouple import AutoConfig
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent
 BASE_DIR = THIS_DIR.parent
-BASE_DIR_ENV = BASE_DIR /".env"
 REPO_DIR = BASE_DIR.parent
-REPO_DIR_ENV = REPO_DIR /".env"
 
-@lru_cache
-
-def get_config():
-    if BASE_DIR_ENV.exists():
-        return Config(RepositoryEnv(str(BASE_DIR_ENV)))
-    if REPO_DIR_ENV.exists():
-        return Config(RepositoryEnv(str(REPO_DIR_ENV)))
-    from decouple import config
-    return config
-
-config = get_config() 
+# AutoConfig searches for .env files in BASE_DIR → REPO_DIR → home dir,
+# and always falls back to os.environ — so Railway-injected vars work too.
+config = AutoConfig(search_path=str(BASE_DIR))

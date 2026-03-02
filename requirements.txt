@@ -7,8 +7,9 @@ Celery
 redis
 django-celery-beat
 django-celery-results
-openai
 anthropic
+sentence-transformers
+llama-index-embeddings-huggingface
 duckduckgo-search
 beautifulsoup4
 pytz
