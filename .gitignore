@@ -1,1 +1,37 @@
+# Environment files
 .env
+src/.env
+*.env
+
+# Virtual environments
+venv/
+.venv/
+src/.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Django
+src/staticfiles/
+*.sqlite3
+db.sqlite3
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Railway
+.railway/
