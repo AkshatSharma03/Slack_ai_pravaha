@@ -1,147 +1,139 @@
-import json 
-import requests
-from django.http import HttpResponse
+"""
+Pravaha — Slack event and slash-command endpoints.
+
+Handles:
+  • URL verification (Slack handshake)
+  • app_mention events  (someone @-mentions the bot in a channel)
+  • Direct messages     (channel ID starts with 'D')
+  • /pravaha slash command
+"""
+import json
+import logging
+
+from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
-from pprint import pprint
-import slacky
+from .tasks import process_slack_message, process_slash_command
 
-from .tasks import slack_message_task
+logger = logging.getLogger(__name__)
+
+_ALLOWED_TYPES = {"url_verification", "event_callback"}
+
+
+def _is_bot_event(event: dict) -> bool:
+    """Return True for bot-originated events (prevents reply loops)."""
+    return bool(
+        event.get("bot_id")
+        or event.get("subtype") in {"bot_message", "message_changed", "message_deleted"}
+    )
+
 
 @csrf_exempt
 @require_POST
 def slack_events_endpoint(request):
-    json_data = {}
+    """Main Slack Events API receiver."""
     try:
-        json_data = json.loads(request.body.decode('utf-8'))
-    except Exception as e:
-        pass
-    data_type = json_data.get('type')
-    print(data_type, json_data.keys(), json_data)
-    allowed_data_type = [
-        "url_verification",
-        "event_callback"
-    ]
-    if data_type not in allowed_data_type:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return HttpResponse("Bad Request", status=400)
+
+    data_type = payload.get("type")
+    if data_type not in _ALLOWED_TYPES:
         return HttpResponse("Not Allowed", status=400)
+
+    # ── URL verification handshake ─────────────────────────────────────────
     if data_type == "url_verification":
-        challenge = json_data.get('challenge')
-        if challenge is None:
-            return HttpResponse("Not Allowed", status=400)
-        return HttpResponse(challenge, status=200)
-    elif data_type == "event_callback":
-        event = json_data.get('event') or {}
-        try:
-            msg_text = event['blocks'][0]['elements'][0]['elements'][1]['text']
-        except:
-            msg_text = event.get('text')
-        user_id = event.get('user')
-        channel_id = event.get('channel')
-        msg_ts = event.get('ts')
-        thread_ts = event.get('thread_ts')  or msg_ts
-        # r = slacky.send_message(msg_text, channel_id=channel_id, user_id=user_id, thread_ts=thread_ts)
-        # slack_message_task.delay("Working...", channel_id=channel_id, user_id=user_id, thread_ts=thread_ts)
-        slack_message_task.apply_async(kwargs={
-                "message": f"{msg_text}", 
-                "channel_id": channel_id,
-                "user_id": user_id}, countdown=0)
-        return HttpResponse("Success", status=200)
-    return HttpResponse("Success", status=200)
-# import json
-# import requests
-# from django.http import HttpResponse
-# from django.views.decorators.csrf import csrf_exempt
-# from django.views.decorators.http import require_POST
+        challenge = payload.get("challenge")
+        if not challenge:
+            return HttpResponse("Missing challenge", status=400)
+        return HttpResponse(challenge, content_type="text/plain")
 
-# from pprint import pprint
+    # ── Event callbacks ────────────────────────────────────────────────────
+    event = payload.get("event", {})
+    if _is_bot_event(event):
+        return HttpResponse("OK", status=200)
 
-# import slacky
-# from .tasks import slack_message_task
+    event_type = event.get("type")
+    channel_id = event.get("channel", "")
 
-# # SLACK_BOT_OAUTH_TOKEN =helpers.config('SLACK_BOT_OAUTH_TOKEN', default =None,cast=str)
-# # # Create your views here.
-# # def send_message(message, channel_id = None, user_id =None):
-# #     url = "https://slack.com/api/chat.postMessage"
-# #     headers ={
-# #         "Content-Type": "application/json; charset-utf-8",
-# #         "Authorization": f"Bearer {SLACK_BOT_OAUTH_TOKEN} ",
-# #         "Accept": "application/json"
-# #     }
-# #     if user_id is not None:
-# #         message = f"<@{user_id}> {message}"
-# #     data ={
-# #         "channel": channel_id,
-# #         "text": f"{message}".strip()
-# #     }
-# #     return requests.post(url, json=data, headers=headers)
-    
-# # {
-# #   "channel": "YOUR_CHANNEL_ID",
-# #   "text": "Hello world :tada:"
-# # }
+    is_mention = event_type == "app_mention"
+    is_dm = event_type == "message" and channel_id.startswith("D")
 
-# #CSRF Exempt
-# @require_POST
-# @csrf_exempt
-# def slack_events_endpoint(request):
-#     json_data ={}
-#     try:
-#         json_data = json.loads(request.body.decode('utf-8'))
-#     except Exception as e:
-#         pass
-#     data_type = json_data.get('type')
-#     print(data_type,json_data.keys(), json_data)
-#     allowed_data_type =[
-#         "url_verification",
-#         "event_callback"
-#     ]
-#     if data_type not in allowed_data_type:
-#         return HttpResponse("Not Allowed", status=400)
-#     if data_type == "url_verification":
-#         challenge = json_data.get('challenge')
-#     # print(json_data.get('challenge'))
-    
-#         if challenge is None:
-#             return HttpResponse("Not Allowed", status=400)
-#         return HttpResponse(challenge, status=200)
-#     elif data_type == "event_callback":
-#             event = json_data.get('event') or {}
-#             pprint(event)
-#     try:
-#         # Extract the text from the message
-#         msg_text = event['blocks'][0]['elements'][0]['elements'][1]['text']
-#     except (IndexError, KeyError, TypeError):
-#         # Fallback if the structured path doesn't work
-#         msg_text = event.get('text', '').strip()
-    
+    if not (is_mention or is_dm):
+        return HttpResponse("OK", status=200)
 
-#     # Extract the channel ID
-#     user_id = event.get('user')
-#     channel_id = event.get('channel')
-#     msg_ts = event.get('ts')
-#     thread_ts = event.get('thread_ts') or msg_ts
-#     # Send the response message back to the same channel
-#     # if channel_id and msg_text:
-#     #     r = slacky.send_message(msg_text, channel_id=channel_id, user_id=user_id, thread_ts=thread_ts)
-    
-#     # return HttpResponse("Success", status=200)
-#     slack_message_task.delay(msg_text, channel_id=channel_id, user_id=user_id, thread_ts=thread_ts)
-#     # elif data_type =="event_callback":
-#     #     event = json_data.get('event') or {}
-#     #     pprint(event)
-#     #     try:
+    msg_text = event.get("text", "").strip()
+    if not msg_text:
+        return HttpResponse("OK", status=200)
 
-#     #         msg_text = event['blocks'][0]['elements'][0]['elements'][1]
-#     #         ['text']
- 
+    user_id = event.get("user")
+    msg_ts = event.get("ts")
+    thread_ts = event.get("thread_ts")
 
-#     #     except (IndexError, KeyError, TypeError):
-#     #     # Fallback if the structured path doesn't work
-#     #      msg_text = event.get('text', '').strip()
+    # Conversation memory scope:
+    #   DMs  → persistent per-DM channel (whole DM is one conversation)
+    #   Threads → scoped to the thread
+    #   Top-level channel messages → each message starts its own thread
+    if channel_id.startswith("D"):
+        conversation_id = channel_id
+    else:
+        conversation_id = thread_ts or msg_ts
 
-#     #     # user_id = event.get('user)
-#     #     channel_id = event.get('channel')
-#     #     r = send_message(msg_text, channel_id=channel_id)
-#     #     return HttpResponse("Success", status=200)
-#     # return HttpResponse("Success", status=200)
+    process_slack_message.apply_async(
+        kwargs={
+            "message": msg_text,
+            "channel_id": channel_id,
+            "user_id": user_id,
+            "msg_ts": msg_ts,
+            "thread_ts": thread_ts,
+            "conversation_id": conversation_id,
+        },
+        countdown=0,
+    )
+    return HttpResponse("OK", status=200)
+
+
+@csrf_exempt
+@require_POST
+def slack_slash_endpoint(request):
+    """
+    Handle /pravaha <query> slash commands.
+
+    Slack requires a response within 3 s; we reply immediately with
+    an acknowledgement and do the real work in a Celery task.
+    """
+    command = request.POST.get("command", "/pravaha")
+    text = request.POST.get("text", "").strip()
+    user_id = request.POST.get("user_id")
+    channel_id = request.POST.get("channel_id")
+    response_url = request.POST.get("response_url")
+
+    if not text:
+        return JsonResponse(
+            {
+                "response_type": "ephemeral",
+                "text": (
+                    f"Usage: `{command} <your question>`\n"
+                    f"Example: `{command} What is the capital of France?`"
+                ),
+            }
+        )
+
+    # Each slash command session is keyed to the user for continuity
+    conversation_id = f"slash_{user_id}"
+
+    process_slash_command.apply_async(
+        kwargs={
+            "message": text,
+            "channel_id": channel_id,
+            "user_id": user_id,
+            "response_url": response_url,
+            "conversation_id": conversation_id,
+        },
+        countdown=0,
+    )
+
+    return JsonResponse(
+        {"response_type": "in_channel", "text": "⏳ _Pravaha is thinking…_"}
+    )

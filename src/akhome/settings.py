@@ -21,13 +21,20 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-$4vxlp#i29n1j29$83ar1md77xou#=b$ns0ddeh4(c*x(+&q(p'
+SECRET_KEY = helpers.config("DJANGO_SECRET_KEY", default='django-insecure-$4vxlp#i29n1j29$83ar1md77xou#=b$ns0ddeh4(c*x(+&q(p')
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = helpers.config("DEBUG", default=False, cast=bool)
 
-ALLOWED_HOSTS = [".slackai.info"]
-CSRF_TRUSTED_ORIGINS=["https://dev.slackai.info"]
+ALLOWED_HOSTS = helpers.config(
+    "ALLOWED_HOSTS",
+    default=".slackai.info",
+    cast=lambda v: [h.strip() for h in v.split(",")]
+)
+CSRF_TRUSTED_ORIGINS = helpers.config(
+    "CSRF_TRUSTED_ORIGINS",
+    default="https://dev.slackai.info",
+    cast=lambda v: [o.strip() for o in v.split(",")]
+)
 
 
 # Application definition
@@ -46,6 +53,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -121,6 +129,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

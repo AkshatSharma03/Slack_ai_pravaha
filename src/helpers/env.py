@@ -17,6 +17,6 @@ def get_config():
     if REPO_DIR_ENV.exists():
         return Config(RepositoryEnv(str(REPO_DIR_ENV)))
     from decouple import config
-    return 
+    return config
 
 config = get_config() 
