@@ -144,9 +144,6 @@ CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers.DatabaseScheduler"
 
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP =True
 
-#redis_backend_use_ssl
-CELERY_REDIS_BACKEND_USE_SSL = True
-
-#broker_use_ssl
-CELERY_BROKER_USE_SSL = True
+CELERY_REDIS_BACKEND_USE_SSL = helpers.config("CELERY_REDIS_SSL", default=False, cast=bool)
+CELERY_BROKER_USE_SSL = helpers.config("CELERY_BROKER_SSL", default=False, cast=bool)
 
